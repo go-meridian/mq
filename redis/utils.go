@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"time"
 
@@ -33,4 +34,22 @@ func isBusyGroupErr(err error) bool {
 		return false
 	}
 	return err.Error() == "BUSYGROUP Consumer Group name already exists"
+}
+
+// orDefault 返回 val，若 val <= 0 则返回 defaultVal
+func orDefault(val, defaultVal int) int {
+	if val <= 0 {
+		return defaultVal
+	}
+	return val
+}
+
+// buildTLSConfig 构建 TLS 配置，isTLS 为 false 时返回 nil
+func buildTLSConfig(isTLS bool) *tls.Config {
+	if !isTLS {
+		return nil
+	}
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
 }
