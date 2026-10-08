@@ -70,3 +70,8 @@ func (m *jetStreamMessage) Timestamp() time.Time {
 func (m *jetStreamMessage) ReplyTo() string {
 	return m.raw.Reply
 }
+
+// Respond 向请求方发送回复（NATS 原生支持）
+func (m *jetStreamMessage) Respond(data []byte) error {
+	return m.raw.Respond(data)
+}

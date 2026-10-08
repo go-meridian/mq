@@ -18,22 +18,38 @@
 //	// 发布消息
 //	client.Publish("subject", data)
 //
-//	// 请求-回复
+//	// 请求-回复（方式一：同步阻塞等待回复，类似 await）
 //	resp, err := client.Request("subject", data, 5000)
+//
+//	// 请求-回复（方式二：异步，立即返回不阻塞，需要结果时再 await）
+//	ch := client.RequestAsync("subject", data, 5000)
+//	// ... 继续执行其他逻辑 ...
+//	res := <-ch // await 回复
+//	if res.Err != nil {
+//	    // 超时/失败处理
+//	}
+//	resp := res.Data
 //
 //	// 订阅主题
 //	sub, _ := client.Subscribe("subject", func(msg mq.Message) {
 //	    fmt.Println(string(msg.Data()))
+//	    // Request/Reply 模式：回复结果，调用方的 Request 收到该回复后继续执行
+//	    msg.Respond(result)
 //	})
 //	defer sub.Unsubscribe()
 //
-//	// 订阅队列（消费者组）
+//	// 订阅队列（消费者组，消息需显式 Ack/Nak）
 //	queueSub, _ := client.SubscribeQueue(&mq.QueueConfig{
 //	    StreamName:   "mystream",
 //	    ConsumerName: "mygroup",
 //	    WorkerCount:  4,
 //	}, func(msg mq.Message) {
-//	    // 处理消息
+//	    if err := handle(msg.Data()); err != nil {
+//	        // 处理失败：Nak 拒绝消息，触发重投递（Redis Streams 为 no-op，超时后自动重投递）
+//	        msg.Nak()
+//	        return
+//	    }
+//	    // 处理成功：Ack 确认消费，消息不再重投递
 //	    msg.Ack()
 //	})
 //	defer queueSub.Unsubscribe()

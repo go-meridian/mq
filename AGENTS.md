@@ -38,7 +38,8 @@ mq/
 // MQClient — 统一客户端
 type MQClient interface {
     Publish(subject string, data []byte) *ce.CodeError
-    Request(subject string, data []byte, timeoutMs int) ([]byte, *ce.CodeError)
+    Request(subject string, data []byte, timeoutMs int) ([]byte, *ce.CodeError)        // 同步阻塞（await）
+    RequestAsync(subject string, data []byte, timeoutMs int) <-chan RequestResult      // 异步非阻塞
     Subscribe(subject string, handler func(msg Message)) (Subscription, *ce.CodeError)
     SubscribeQueue(cfg *QueueConfig, handler func(msg Message)) (Subscription, *ce.CodeError)
     EnsureQueue(cfg *QueueConfig) *ce.CodeError
@@ -46,10 +47,16 @@ type MQClient interface {
     Close()
 }
 
+// RequestResult — 异步请求结果（RequestAsync 返回的通道元素）
+type RequestResult struct {
+    Data []byte
+    Err  *ce.CodeError
+}
+
 // Message — 消息载体
 type Message interface {
     Subject() string; Data() []byte; Ack() error; Nak() error
-    Timestamp() time.Time; ReplyTo() string
+    Timestamp() time.Time; ReplyTo() string; Respond(data []byte) error
 }
 
 // Subscription — 订阅句柄
@@ -64,6 +71,70 @@ type Subscription interface {
 |------|------|----------|
 | NATS | `ModeNATS` | Core NATS（Pub/Sub）+ JetStream（持久化、消费者组） |
 | Redis | `ModeRedis` | 子模式：`RedisMQModeStream`（Streams + Consumer Group）/ `RedisMQModePubSub`（Pub/Sub + List） |
+
+### Request/Reply 两种调用方式
+
+服务端统一通过 `msg.Respond()` 回复，调用方按需选择同步或异步：
+
+```go
+// 服务端：处理请求并回复
+client.Subscribe("subject", func(msg mq.Message) {
+    result := handle(msg.Data())
+    msg.Respond(result)
+})
+
+// 方式一：同步阻塞等待回复（await），超时返回错误
+resp, ce := client.Request("subject", data, 5000)
+if ce != nil {
+    // 超时/失败处理
+}
+
+// 方式二：异步，立即返回不阻塞，需要结果时再 await
+ch := client.RequestAsync("subject", data, 5000)
+// ... 继续执行其他逻辑 ...
+res := <-ch // 需要结果时 await（可配合 select 做多路等待）
+if res.Err != nil {
+    // 超时/失败处理
+}
+resp := res.Data
+```
+
+`RequestAsync` 不读取结果也不会泄漏：goroutine 在超时窗口（timeoutMs）内自动退出，1 容量缓冲保证发送不阻塞，结果随 channel 被 GC 回收。注意结果仅可读一次（channel 关闭后重复读取返回零值）；完全不需要回复的场景用 `Publish` 更省。
+
+### Ack/Nak 使用
+
+队列订阅（`SubscribeQueue`）的消息必须显式确认：处理成功 `Ack()`，处理失败 `Nak()` 触发重投递。
+
+```go
+client.SubscribeQueue(&mq.QueueConfig{
+    StreamName:   "mystream",
+    ConsumerName: "mygroup",
+    WorkerCount:  4,
+}, func(msg mq.Message) {
+    if err := handle(msg.Data()); err != nil {
+        msg.Nak() // 拒绝消息，触发重投递
+        return
+    }
+    msg.Ack() // 确认消费，消息不再重投递
+})
+```
+
+各模式语义：
+
+| 模式 | Ack | Nak |
+|------|-----|-----|
+| NATS Core（Subscribe） | no-op | no-op |
+| NATS JetStream（SubscribeQueue） | 确认消费 | 触发重投递 |
+| Redis Pub/Sub（Subscribe） | no-op | no-op |
+| Redis Streams | XACK 确认消费 | no-op（超时后自动重投递） |
+
+注意：
+- 未 Ack 的消息超时后会重新投递，handler 需保证幂等
+- `WorkerPool` 内 handler panic 时自动恢复并 Nak
+- `Respond()` 与 `Ack()` 底层都发往消息的 Reply 主题，能否组合取决于模式：
+  - Core NATS `Subscribe`（Request/Reply 场景）：可同时使用，先 `Respond` 再 `Ack`（Ack 为 no-op，保留无害）
+  - JetStream `SubscribeQueue`：禁止 `Respond`——Reply 是 ack 专用主题，Respond 会干扰 Ack 协议
+  - Redis：`Respond` 返回不支持错误，不可组合
 
 ### WorkerPool
 
@@ -106,9 +177,8 @@ type Subscription interface {
 
 ## 已知限制
 
-- **Message 接口无 `Respond()` 方法**：mq.Message 当前不支持 Request/Reply 的响应端。需要 Respond 的场景必须绕过抽象层直接使用原生客户端（如 `*natsLib.Msg.Respond()`）
 - **Redis Pub/Sub 模式下 Ack/Nak 为 no-op**：Pub/Sub 无持久化，Ack/Nak 不产生实际效果
-- **Request/Reply 仅 Redis 实现**：使用 LPush + BRPOP + UUID 应答队列模式
+- **Request/Reply 仅 NATS 端到端可用**：`Request()` 同步阻塞等待服务端 `Respond()` 的回复（类似 HTTP）。NATS 使用原生 Request/Reply 机制；Redis 仅实现了请求端（LPush + BRPOP + UUID 应答队列），请求键 `mq:req:<subject>` 无订阅方且 `Respond()` 返回不支持错误，链路未打通
 
 ## Lobby 项目使用方式（下游消费者）
 

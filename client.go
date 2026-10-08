@@ -7,8 +7,12 @@ type MQClient interface {
 	// Publish 异步发布消息（不等待回复）
 	Publish(subject string, data []byte) *ce.CodeError
 
-	// Request 同步请求-等待回复（超时返回错误）
+	// Request 同步请求-等待回复（阻塞至收到回复或超时，类似 await）
 	Request(subject string, data []byte, timeoutMs int) ([]byte, *ce.CodeError)
+
+	// RequestAsync 异步请求-等待回复，立即返回结果通道，不阻塞调用方；
+	// 需要结果时从通道读取（即 await），通道仅接收一次结果后关闭
+	RequestAsync(subject string, data []byte, timeoutMs int) <-chan RequestResult
 
 	// Subscribe 订阅主题（Core 模式，收到消息直接回调）
 	Subscribe(subject string, handler func(msg Message)) (Subscription, *ce.CodeError)
@@ -26,6 +30,15 @@ type MQClient interface {
 
 	// Close 关闭连接
 	Close()
+}
+
+// RequestResult 异步请求（RequestAsync）的结果
+type RequestResult struct {
+	// Data 回复数据（Err 非 nil 时为空）
+	Data []byte
+
+	// Err 请求失败原因（超时、无响应方、连接断开等）
+	Err *ce.CodeError
 }
 
 // Subscription 订阅句柄

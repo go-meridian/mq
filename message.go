@@ -21,4 +21,8 @@ type Message interface {
 
 	// ReplyTo 回复主题（Request/Reply 模式使用）
 	ReplyTo() string
+
+	// Respond 向请求方回复结果（Request/Reply 模式，服务端在 handler 中调用，
+	// 调用方通过 Request 阻塞等待该回复）
+	Respond(data []byte) error
 }

@@ -2,6 +2,8 @@ package redis
 
 import (
 	"time"
+
+	"github.com/go-meridian/mq"
 )
 
 // redisMessage Redis 消息实现
@@ -37,6 +39,11 @@ func (m *redisMessage) Timestamp() time.Time {
 
 func (m *redisMessage) ReplyTo() string {
 	return m.replyTo
+}
+
+// Respond Redis 模式暂不支持 Request/Reply 响应
+func (m *redisMessage) Respond(data []byte) error {
+	return mq.MQRequestError.Msg("redis respond: not supported")
 }
 
 // redisStreamMessage Redis Streams 消息实现（支持 Ack）
@@ -81,6 +88,11 @@ func (m *redisStreamMessage) Timestamp() time.Time {
 
 func (m *redisStreamMessage) ReplyTo() string {
 	return ""
+}
+
+// Respond Redis 模式暂不支持 Request/Reply 响应
+func (m *redisStreamMessage) Respond(data []byte) error {
+	return mq.MQRequestError.Msg("redis respond: not supported")
 }
 
 // requestEnvelope 请求消息封装

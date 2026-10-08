@@ -294,6 +294,17 @@ func (c *redisClient) Request(subject string, data []byte, timeoutMs int) ([]byt
 	return []byte(result[1]), nil
 }
 
+// RequestAsync 异步请求-等待回复，立即返回结果通道，不阻塞调用方
+func (c *redisClient) RequestAsync(subject string, data []byte, timeoutMs int) <-chan mq.RequestResult {
+	ch := make(chan mq.RequestResult, 1)
+	go func() {
+		resp, ce := c.Request(subject, data, timeoutMs)
+		ch <- mq.RequestResult{Data: resp, Err: ce}
+		close(ch)
+	}()
+	return ch
+}
+
 // Subscribe 订阅主题
 func (c *redisClient) Subscribe(subject string, handler func(msg mq.Message)) (mq.Subscription, *ce.CodeError) {
 	switch c.mqMode {
